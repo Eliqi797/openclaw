@@ -590,7 +590,7 @@ export async function sendMediaFeishu(params: {
       cfg,
       to,
       fileKey,
-      msgType: routing.msgType === "image" ? "file" : routing.msgType,
+      msgType: routing.msgType,
       replyToMessageId,
       replyInThread,
       accountId,
