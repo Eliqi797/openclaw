@@ -1,0 +1,64 @@
+name: Notify OpenClaw Release
+
+on:
+  release:
+    types: [published]
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Send Feishu Notification
+        env:
+          WEBHOOK_URL: ${{ secrets.FEISHU_WEBHOOK_URL }}
+          SIGN_SECRET: ${{ secrets.FEISHU_SIGN_SECRET }}
+          TAG: ${{ github.event.release.tag_name }}
+          URL: ${{ github.event.release.html_url }}
+          BODY: ${{ github.event.release.body }}
+          PUBLISHED: ${{ github.event.release.published_at }}
+        run: |
+          python3 << 'PYEOF'
+          import hashlib, hmac, base64, json, os, time, urllib.request, urllib.parse
+
+          timestamp = str(int(time.time()))
+          secret = os.environ["SIGN_SECRET"]
+          webhook_url = os.environ["WEBHOOK_URL"]
+          tag = os.environ["TAG"]
+          url = os.environ["URL"]
+          body = os.environ.get("BODY", "")[:2000]
+          published = os.environ.get("PUBLISHED", "")
+
+          string_to_sign = f"{timestamp}\n{secret}"
+          hmac_code = hmac.new(
+              string_to_sign.encode("utf-8"),
+              digestmod=hashlib.sha256
+          ).digest()
+          sign = urllib.parse.quote_plus(base64.b64encode(hmac_code))
+
+          msg = {
+              "msg_type": "interactive",
+              "card": {
+                  "header": {
+                      "title": {"tag": "plain_text", "content": f"🚀 OpenClaw 新版本发布: {tag}"},
+                      "template": "blue"
+                  },
+                  "elements": [
+                      {"tag": "div", "text": {"tag": "lark_md", "content": f"**版本**: {tag}\n**发布时间**: {published[:10]}\n**链接**: [查看 Release]({url})"}},
+                      {"tag": "div", "text": {"tag": "lark_md", "content": f"**变更摘要**:\n{body[:500]}"}},
+                      {"tag": "note", "elements": [{"tag": "plain_text", "content": "来自 GitHub Actions · 请 CEO Agent 处理"}}]
+                  ]
+              }
+          }
+
+          data = json.dumps(msg).encode("utf-8")
+          req = urllib.request.Request(
+              f"{webhook_url}&timestamp={timestamp}&sign={sign}",
+              data=data,
+              headers={"Content-Type": "application/json"}
+          )
+          resp = urllib.request.urlopen(req)
+          result = json.loads(resp.read())
+          print(f"Response: {json.dumps(result, ensure_ascii=False)}")
+          PYEOF
