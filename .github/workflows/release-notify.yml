@@ -1,64 +1,108 @@
-name: Notify OpenClaw Release
+name: Monitor OpenClaw Releases
 
 on:
-  release:
-    types: [published]
+  schedule:
+    - cron: '0 * * * *'  # Every hour
+  workflow_dispatch:  # Manual trigger for testing
 
 jobs:
-  notify:
+  check-and-notify:
     runs-on: ubuntu-latest
     permissions:
       contents: read
     steps:
-      - name: Send Feishu Notification
+      - name: Check for new releases and notify
         env:
           WEBHOOK_URL: ${{ secrets.FEISHU_WEBHOOK_URL }}
-          SIGN_SECRET: ${{ secrets.FEISHU_SIGN_SECRET }}
-          TAG: ${{ github.event.release.tag_name }}
-          URL: ${{ github.event.release.html_url }}
-          BODY: ${{ github.event.release.body }}
-          PUBLISHED: ${{ github.event.release.published_at }}
         run: |
           python3 << 'PYEOF'
-          import hashlib, hmac, base64, json, os, time, urllib.request, urllib.parse
+          import json, time, urllib.request, os, subprocess
 
-          timestamp = str(int(time.time()))
-          secret = os.environ["SIGN_SECRET"]
-          webhook_url = os.environ["WEBHOOK_URL"]
-          tag = os.environ["TAG"]
-          url = os.environ["URL"]
-          body = os.environ.get("BODY", "")[:2000]
-          published = os.environ.get("PUBLISHED", "")
+          # Get upstream latest release
+          req = urllib.request.Request(
+              "https://api.github.com/repos/openclaw/openclaw/releases/latest",
+              headers={"User-Agent": "OpenClaw-Release-Monitor"}
+          )
+          resp = urllib.request.urlopen(req)
+          release = json.loads(resp.read())
 
-          string_to_sign = f"{timestamp}\n{secret}"
-          hmac_code = hmac.new(
-              string_to_sign.encode("utf-8"),
-              digestmod=hashlib.sha256
-          ).digest()
-          sign = urllib.parse.quote_plus(base64.b64encode(hmac_code))
+          tag = release["tag_name"]
+          url = release["html_url"]
+          body = release.get("body", "")[:1500]
+          published = release.get("published_at", "")[:10]
+          is_prerelease = release.get("prerelease", False)
+
+          # Cache file to avoid duplicate notifications
+          cache_file = os.path.join(os.environ.get("GITHUB_WORKSPACE", "/tmp"), ".last_release_tag")
+          last_tag = ""
+          if os.path.exists(cache_file):
+              with open(cache_file) as f:
+                  last_tag = f.read().strip()
+
+          if tag == last_tag:
+              print(f"No new release. Current: {tag}")
+              exit(0)
+
+          # Save new tag
+          with open(cache_file, "w") as f:
+              f.write(tag)
+
+          print(f"New release detected: {tag}")
+
+          # Send Feishu notification
+          label = "🚀 新版本发布" if not is_prerelease else "🧪 预发布版本"
+          color = "blue" if not is_prerelease else "purple"
 
           msg = {
               "msg_type": "interactive",
               "card": {
                   "header": {
-                      "title": {"tag": "plain_text", "content": f"🚀 OpenClaw 新版本发布: {tag}"},
-                      "template": "blue"
+                      "title": {"tag": "plain_text", "content": f"{label}: OpenClaw {tag}"},
+                      "template": color
                   },
                   "elements": [
-                      {"tag": "div", "text": {"tag": "lark_md", "content": f"**版本**: {tag}\n**发布时间**: {published[:10]}\n**链接**: [查看 Release]({url})"}},
-                      {"tag": "div", "text": {"tag": "lark_md", "content": f"**变更摘要**:\n{body[:500]}"}},
-                      {"tag": "note", "elements": [{"tag": "plain_text", "content": "来自 GitHub Actions · 请 CEO Agent 处理"}}]
+                      {
+                          "tag": "div",
+                          "text": {
+                              "tag": "lark_md",
+                              "content": f"**版本**: {tag}\n**发布时间**: {published}\n**类型**: {'正式版' if not is_prerelease else '预发布'}\n**链接**: [查看 Release]({url})"
+                          }
+                      },
+                      {
+                          "tag": "div",
+                          "text": {
+                              "tag": "lark_md",
+                              "content": f"**变更摘要**:\n{body}"
+                          }
+                      },
+                      {
+                          "tag": "action",
+                          "actions": [
+                              {
+                                  "tag": "button",
+                                  "text": {"tag": "plain_text", "content": "查看完整 Release"},
+                                  "url": url,
+                                  "type": "primary"
+                              }
+                          ]
+                      },
+                      {
+                          "tag": "note",
+                          "elements": [
+                              {"tag": "plain_text", "content": "来自 GitHub Actions · 请 CEO Agent 处理"}
+                          ]
+                      }
                   ]
               }
           }
 
           data = json.dumps(msg).encode("utf-8")
           req = urllib.request.Request(
-              f"{webhook_url}&timestamp={timestamp}&sign={sign}",
+              os.environ["WEBHOOK_URL"],
               data=data,
               headers={"Content-Type": "application/json"}
           )
           resp = urllib.request.urlopen(req)
           result = json.loads(resp.read())
-          print(f"Response: {json.dumps(result, ensure_ascii=False)}")
+          print(f"Notification sent: {json.dumps(result)}")
           PYEOF
