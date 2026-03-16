@@ -3,7 +3,7 @@ name: Monitor OpenClaw Releases
 on:
   schedule:
     - cron: '0 * * * *'  # Every hour
-  workflow_dispatch:  # Manual trigger for testing
+  workflow_dispatch:
 
 jobs:
   check-and-notify:
@@ -13,7 +13,9 @@ jobs:
     steps:
       - name: Check for new releases and notify
         env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           WEBHOOK_URL: ${{ secrets.FEISHU_WEBHOOK_URL }}
+          REPO: Eliqi797/openclaw
         run: |
           python3 << 'PYEOF'
           import json, time, urllib.request, os, subprocess
@@ -32,22 +34,24 @@ jobs:
           published = release.get("published_at", "")[:10]
           is_prerelease = release.get("prerelease", False)
 
-          # Cache file to avoid duplicate notifications
-          cache_file = os.path.join(os.environ.get("GITHUB_WORKSPACE", "/tmp"), ".last_release_tag")
-          last_tag = ""
-          if os.path.exists(cache_file):
-              with open(cache_file) as f:
-                  last_tag = f.read().strip()
+          # Check last notified tag from repo variable
+          result = subprocess.run(
+              ["gh", "variable", "get", "LAST_RELEASE_TAG", "--repo", os.environ["REPO"]],
+              capture_output=True, text=True
+          )
+          last_tag = result.stdout.strip() if result.returncode == 0 else ""
 
           if tag == last_tag:
               print(f"No new release. Current: {tag}")
               exit(0)
 
-          # Save new tag
-          with open(cache_file, "w") as f:
-              f.write(tag)
+          print(f"New release detected: {tag} (previous: {last_tag})")
 
-          print(f"New release detected: {tag}")
+          # Update repo variable
+          subprocess.run(
+              ["gh", "variable", "set", "LAST_RELEASE_TAG", "--repo", os.environ["REPO"], "--body", tag],
+              capture_output=True, text=True
+          )
 
           # Send Feishu notification
           label = "🚀 新版本发布" if not is_prerelease else "🧪 预发布版本"
