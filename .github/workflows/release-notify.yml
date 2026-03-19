@@ -10,6 +10,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      variables: write
     steps:
       - name: Check for new releases and notify
         env:
